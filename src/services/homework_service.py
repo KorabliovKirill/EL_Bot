@@ -92,7 +92,10 @@ def get_expiring_homeworks_text(username: str | None) -> str:
         delivery = parse_delivery_date(hw["delivery_date"])
         hours_left = hours_left_to_deadline(delivery, now)
         student = hw["user"]["first_name"].strip() + " " + hw["user"].get("last_name", "").strip()
-        task_name = hw["homework"]["type"]["name"]
+        
+        # Используем lesson.topic вместо type.name
+        lesson = hw["homework"].get("lesson", {})
+        task_name = lesson.get("topic", hw["homework"]["type"]["name"])  # fallback на type.name
         
         lines.append(
             f"• {student.strip() or '??'} — {task_name} "

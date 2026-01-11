@@ -27,7 +27,10 @@ def get_pending_notifications() -> list[tuple[str, str]]:
         tg_ids = get_mentor_telegram_ids_by_clan(clan_id)
         
         student = (hw["user"]["first_name"] + " " + hw["user"].get("last_name", "")).strip() or "??"
-        task = hw["homework"]["type"]["name"]
+        
+        # Используем lesson.topic вместо type.name
+        lesson = hw["homework"].get("lesson", {})
+        task = lesson.get("topic", hw["homework"]["type"]["name"])  # fallback на type.name
         
         text = (
             f"⚠️ Напоминание\n"

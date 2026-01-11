@@ -8,7 +8,7 @@ from src.utils.telegram import send_split_message   # ← добавь этот 
 router = Router(name="expiring")
 
 
-@router.message(F.text == "Истекающие домашки")
+@router.message(F.text == "⏰ Истекающие домашки")
 async def show_expiring(message: Message):
     if not await check_authorization(message):
         return

@@ -10,7 +10,7 @@ from src.utils.telegram import send_split_message      # ← новый импо
 router = Router(name="info")
 
 
-@router.message(F.text == "Информация по домашкам")
+@router.message(F.text == "📚 Информация по домашкам")
 async def show_homeworks_info(message: Message):
     if not await check_authorization(message):
         return
