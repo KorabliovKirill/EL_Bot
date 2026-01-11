@@ -9,6 +9,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = BASE_DIR / "data"
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+BASE_URL = os.getenv("BASE_URL")
 
 if not TELEGRAM_TOKEN:
     raise ValueError("TELEGRAM_TOKEN не найден в .env файле")
