@@ -4,7 +4,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties   # ← добавьте этот импорт
 
 from src.config.settings import TELEGRAM_TOKEN
-from src.handlers import start, info, expiring, update_homeworks
+from src.handlers import start, info, expiring, update_homeworks, admin
 
 bot = Bot(
     token=TELEGRAM_TOKEN,
@@ -20,3 +20,4 @@ dp.include_router(start.router)
 dp.include_router(info.router)
 dp.include_router(expiring.router)
 dp.include_router(update_homeworks.router)
+dp.include_router(admin.router)

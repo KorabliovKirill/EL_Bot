@@ -45,3 +45,56 @@ def get_mentor_telegram_ids_by_clan(clan_id: int) -> list[str]:
                 ids.append(str(tg_id))
     
     return ids
+
+
+def is_admin(username: str | None) -> bool:
+    """
+    Проверяет, является ли пользователь администратором
+    
+    Args:
+        username: Telegram username пользователя
+        
+    Returns:
+        True если пользователь является администратором, иначе False
+    """
+    if not username:
+        return False
+    
+    username = username.lstrip("@")
+    admins = get_admins()
+    
+    return any(
+        admin.get("telegram_tag", "").lstrip("@") == username
+        for admin in admins
+    )
+
+
+def get_user_info(username: str | None) -> dict | None:
+    """
+    Получает полную информацию о пользователе (наставник или админ)
+    
+    Args:
+        username: Telegram username пользователя
+        
+    Returns:
+        Словарь с информацией о пользователе или None если не найден
+    """
+    if not username:
+        return None
+    
+    username = username.lstrip("@")
+    
+    mentors = get_mentors()
+    admins = get_admins()
+    
+    # Ищем сначала в наставниках
+    for mentor in mentors:
+        if mentor.get("telegram_tag", "").lstrip("@") == username:
+            return {**mentor, "role": "mentor"}
+    
+    # Затем в админах
+    for admin in admins:
+        if admin.get("telegram_tag", "").lstrip("@") == username:
+            return {**admin, "role": "admin"}
+    
+    return None
