@@ -1,27 +1,31 @@
 # src/utils/telegram.py
 from aiogram.types import Message
 
-MAX_MESSAGE_LENGTH = 4090  # запас на форматирование и подписи
+TELEGRAM_LIMIT = 4096
+PREFIX_TEMPLATE = "Часть {i}/{total}\n\n"
 
 
 async def send_split_message(
     message: Message,
     text: str,
-    chunk_separator: str = "\n\n",
     **kwargs
 ):
     """
-    Отправляет длинный текст, разбивая его на части ≤ 4096 символов
+    Надёжно отправляет длинный текст, гарантируя,
+    что ни одно сообщение не превысит лимит Telegram.
     """
-    if len(text) <= MAX_MESSAGE_LENGTH:
+
+    # Быстрый путь
+    if len(text) <= TELEGRAM_LIMIT:
         await message.answer(text, **kwargs)
         return
 
-    parts = []
+    lines = text.splitlines(keepends=True)
+    parts: list[str] = []
     current = ""
 
-    for line in text.splitlines(keepends=True):
-        if len(current) + len(line) > MAX_MESSAGE_LENGTH:
+    for line in lines:
+        if len(current) + len(line) > TELEGRAM_LIMIT:
             parts.append(current.rstrip())
             current = line
         else:
@@ -30,6 +34,13 @@ async def send_split_message(
     if current:
         parts.append(current.rstrip())
 
-    for i, part in enumerate(parts, 1):
-        prefix = f"Часть {i}/{len(parts)}\n\n" if len(parts) > 1 else ""
-        await message.answer(prefix + part, **kwargs)
+    total = len(parts)
+
+    for i, part in enumerate(parts, start=1):
+        prefix = PREFIX_TEMPLATE.format(i=i, total=total) if total > 1 else ""
+        max_len = TELEGRAM_LIMIT - len(prefix)
+
+        # 🔐 финальная защита
+        safe_part = part[:max_len]
+
+        await message.answer(prefix + safe_part, **kwargs)
