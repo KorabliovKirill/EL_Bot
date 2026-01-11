@@ -3,12 +3,12 @@
 """
 import json
 import os
-import time
+import asyncio
 import random
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
-import requests
+import aiohttp
 from urllib.parse import quote
 
 from src.config.settings import DATA_DIR, BASE_DIR
@@ -30,21 +30,27 @@ class HomeworkUpdateError(Exception):
     pass
 
 
-def login(email: str, password: str) -> str:
+async def login(email: str, password: str, session: aiohttp.ClientSession) -> str:
     """Авторизация и получение токена"""
     try:
-        resp = requests.post(
+        async with session.post(
             LOGIN_URL,
             json={"email": email, "password": password},
-            timeout=15
-        )
-        resp.raise_for_status()
-        return resp.json()["access_token"]
+            timeout=aiohttp.ClientTimeout(total=15)
+        ) as resp:
+            resp.raise_for_status()
+            data = await resp.json()
+            return data["access_token"]
     except Exception as e:
         raise HomeworkUpdateError(f"Ошибка авторизации: {e}")
 
 
-def get_clan_homeworks_page(token: str, clan_id: int, page: int = 1) -> tuple[list, dict]:
+async def get_clan_homeworks_page(
+    token: str, 
+    clan_id: int, 
+    page: int,
+    session: aiohttp.ClientSession
+) -> tuple[list, dict]:
     """Получение одной страницы домашних заданий клана"""
     headers = {
         "Authorization": f"Bearer {token}",
@@ -61,15 +67,19 @@ def get_clan_homeworks_page(token: str, clan_id: int, page: int = 1) -> tuple[li
     url = f"{API_BASE_URL}/clan/{clan_id}/homeworks"
 
     try:
-        resp = requests.get(url, headers=headers, params=params, timeout=30)
-        
-        if resp.status_code == 429:
-            time.sleep(60)
-            return get_clan_homeworks_page(token, clan_id, page)
+        async with session.get(
+            url, 
+            headers=headers, 
+            params=params, 
+            timeout=aiohttp.ClientTimeout(total=30)
+        ) as resp:
+            if resp.status == 429:
+                await asyncio.sleep(60)
+                return await get_clan_homeworks_page(token, clan_id, page, session)
 
-        resp.raise_for_status()
-        data = resp.json()
-        return data.get("data", []), data.get("meta", {})
+            resp.raise_for_status()
+            data = await resp.json()
+            return data.get("data", []), data.get("meta", {})
 
     except Exception as e:
         raise HomeworkUpdateError(f"Ошибка загрузки домашек клана {clan_id}: {e}")
@@ -116,51 +126,55 @@ async def update_homeworks_for_clans(clan_ids: list[int]) -> dict:
         }
     
     try:
-        # Авторизация
-        token = login(email, password)
-        
-        # Загружаем существующие домашки
-        if HOMEWORKS_FILE.exists():
-            with open(HOMEWORKS_FILE, "r", encoding="utf-8") as f:
-                existing_data = json.load(f)
-                existing_homeworks = existing_data.get("homeworks", [])
-        else:
-            existing_homeworks = []
-        
-        # Удаляем старые домашки обновляемых кланов
-        other_clans_homeworks = [
-            hw for hw in existing_homeworks
-            if hw.get("clan_id") not in clan_ids
-        ]
-        
-        # Загружаем новые домашки для указанных кланов
-        new_homeworks = []
-        
-        for clan_id in clan_ids:
-            page = 1
-            clan_count = 0
+        # Создаем сессию для всех запросов
+        async with aiohttp.ClientSession() as session:
+            # Авторизация
+            token = await login(email, password, session)
             
-            while True:
-                homeworks, meta = get_clan_homeworks_page(token, clan_id, page)
+            # Загружаем существующие домашки
+            if HOMEWORKS_FILE.exists():
+                with open(HOMEWORKS_FILE, "r", encoding="utf-8") as f:
+                    existing_data = json.load(f)
+                    existing_homeworks = existing_data.get("homeworks", [])
+            else:
+                existing_homeworks = []
+            
+            # Удаляем старые домашки обновляемых кланов
+            other_clans_homeworks = [
+                hw for hw in existing_homeworks
+                if hw.get("clan_id") not in clan_ids
+            ]
+            
+            # Загружаем новые домашки для указанных кланов
+            new_homeworks = []
+            
+            for clan_id in clan_ids:
+                page = 1
+                clan_count = 0
                 
-                if not homeworks:
-                    break
-                
-                for hw in homeworks:
-                    add_clan_context(hw, clan_id)
-                
-                new_homeworks.extend(homeworks)
-                clan_count += len(homeworks)
-                
-                last_page = meta.get("last_page", 1)
-                
-                if page >= last_page:
-                    break
-                
-                page += 1
-                # Случайная задержка
-                sleep_time = DELAY_BASE + random.uniform(-DELAY_JITTER, DELAY_JITTER)
-                time.sleep(max(1.0, sleep_time))
+                while True:
+                    homeworks, meta = await get_clan_homeworks_page(
+                        token, clan_id, page, session
+                    )
+                    
+                    if not homeworks:
+                        break
+                    
+                    for hw in homeworks:
+                        add_clan_context(hw, clan_id)
+                    
+                    new_homeworks.extend(homeworks)
+                    clan_count += len(homeworks)
+                    
+                    last_page = meta.get("last_page", 1)
+                    
+                    if page >= last_page:
+                        break
+                    
+                    page += 1
+                    # Случайная задержка
+                    sleep_time = DELAY_BASE + random.uniform(-DELAY_JITTER, DELAY_JITTER)
+                    await asyncio.sleep(max(1.0, sleep_time))
         
         # Объединяем домашки: старые (других кланов) + новые (обновленных кланов)
         all_homeworks = other_clans_homeworks + new_homeworks
