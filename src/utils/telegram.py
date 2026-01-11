@@ -1,8 +1,22 @@
 # src/utils/telegram.py
+import html
 from aiogram.types import Message
 
 TELEGRAM_LIMIT = 4096
 PREFIX_TEMPLATE = "Часть {i}/{total}\n\n"
+
+
+def escape_html(text: str) -> str:
+    """
+    Экранирует HTML-спецсимволы для безопасной отправки в Telegram
+    
+    Args:
+        text: текст для экранирования
+        
+    Returns:
+        текст с экранированными HTML-символами
+    """
+    return html.escape(text, quote=False)
 
 
 async def send_split_message(

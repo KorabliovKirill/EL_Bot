@@ -8,6 +8,7 @@ from src.utils.datetime import (
     hours_left_to_deadline,
     now_utc
 )
+from src.utils.telegram import escape_html
 
 
 def get_relevant_homeworks(username: str | None) -> list[dict]:
@@ -97,8 +98,12 @@ def get_expiring_homeworks_text(username: str | None) -> str:
         lesson = hw["homework"].get("lesson", {})
         task_name = lesson.get("topic", hw["homework"]["type"]["name"])  # fallback на type.name
         
+        # Экранируем HTML-спецсимволы
+        student_safe = escape_html(student.strip() or '??')
+        task_name_safe = escape_html(task_name)
+        
         lines.append(
-            f"• {student.strip() or '??'} — {task_name} "
+            f"• {student_safe} — {task_name_safe} "
             f"(клан {hw['clan_id']}, осталось ~{int(hours_left)} ч)"
         )
     

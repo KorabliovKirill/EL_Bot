@@ -1,22 +1,24 @@
 """
 Хендлеры для админ-панели
 """
+import asyncio
+import logging
+from pathlib import Path
 from aiogram import Router, F
 from aiogram.types import Message
-from aiogram.enums import ChatAction
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 from src.handlers.base import check_authorization
 from src.services.auth_service import is_admin, get_user_clan_ids
-from src.services.mentor_updater import update_all_mentors
-from src.services.homework_updater import update_all_homeworks
 from src.services.admin_service import create_admin
 from src.keyboards.admin_menu import get_admin_menu
 from src.keyboards.main_menu import get_main_menu
+from src.config.settings import BASE_DIR
 
 router = Router(name="admin")
+logger = logging.getLogger(__name__)
 
 # Блокировка для предотвращения одновременных обновлений
 _update_lock = set()
@@ -82,6 +84,73 @@ async def back_to_main_menu(message: Message, state: FSMContext):
     )
 
 
+async def run_script_async(script_name: str, chat_id: int, bot):
+    """Запускает скрипт асинхронно и отправляет уведомление о завершении"""
+    script_path = BASE_DIR / "scripts" / script_name
+    
+    logger.info(f"Запуск скрипта: {script_path}")
+    
+    try:
+        # Запускаем скрипт
+        process = await asyncio.create_subprocess_exec(
+            "python3",
+            str(script_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(BASE_DIR)
+        )
+        
+        # Ожидаем завершения
+        stdout, stderr = await process.communicate()
+        
+        # Декодируем вывод
+        stdout_text = stdout.decode('utf-8') if stdout else ""
+        stderr_text = stderr.decode('utf-8') if stderr else ""
+        
+        # Логируем результаты
+        logger.info(f"Скрипт {script_name} завершен с кодом: {process.returncode}")
+        if stdout_text:
+            logger.info(f"STDOUT:\n{stdout_text}")
+        if stderr_text:
+            logger.error(f"STDERR:\n{stderr_text}")
+        
+        # Отправляем уведомление пользователю
+        if process.returncode == 0:
+            # Извлекаем полезную информацию из вывода
+            lines = stdout_text.strip().split('\n')
+            summary_lines = [line for line in lines if any(keyword in line.lower() for keyword in ['готово', 'всего', 'уникальных', 'заданий', 'файл'])]
+            summary = '\n'.join(summary_lines[-5:]) if summary_lines else "Обновление завершено успешно"
+            
+            await bot.send_message(
+                chat_id,
+                f"✅ <b>Скрипт выполнен успешно!</b>\n\n"
+                f"📄 <code>{script_name}</code>\n\n"
+                f"📊 Результат:\n{summary}"
+            )
+        else:
+            error_msg = stderr_text[-500:] if stderr_text else "Неизвестная ошибка"
+            await bot.send_message(
+                chat_id,
+                f"❌ <b>Ошибка выполнения скрипта</b>\n\n"
+                f"📄 <code>{script_name}</code>\n"
+                f"Код возврата: {process.returncode}\n\n"
+                f"Ошибка:\n<code>{error_msg}</code>"
+            )
+    
+    except Exception as e:
+        logger.error(f"Ошибка при запуске скрипта {script_name}: {e}", exc_info=True)
+        await bot.send_message(
+            chat_id,
+            f"❌ <b>Критическая ошибка</b>\n\n"
+            f"Не удалось запустить скрипт <code>{script_name}</code>\n\n"
+            f"Ошибка: {str(e)}"
+        )
+    
+    finally:
+        # Снимаем блокировку
+        _update_lock.discard(chat_id)
+
+
 @router.message(F.text == "👤 Обновить базу наставников")
 async def update_mentors(message: Message):
     """Обновляет всю базу наставников"""
@@ -94,10 +163,10 @@ async def update_mentors(message: Message):
     if not await check_admin_rights(message):
         return
     
-    user_id = message.from_user.id
+    chat_id = message.chat.id
     
     # Проверка блокировки
-    if user_id in _update_lock:
+    if chat_id in _update_lock:
         await message.answer(
             "⏳ Обновление уже выполняется.\n"
             "Пожалуйста, дождитесь завершения предыдущего обновления."
@@ -105,48 +174,20 @@ async def update_mentors(message: Message):
         return
     
     # Добавляем блокировку
-    _update_lock.add(user_id)
+    _update_lock.add(chat_id)
     
-    try:
-        # Отправляем индикатор "печатает"
-        await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
-        
-        # Информируем о начале обновления
-        await message.answer(
-            "🔄 Начинаю обновление базы наставников...\n\n"
-            "⏳ Это может занять продолжительное время (несколько минут).\n"
-            "Пожалуйста, ожидайте..."
-        )
-        
-        # Выполняем обновление
-        result = await update_all_mentors()
-        
-        # Отправляем результат
-        if result["success"]:
-            await message.answer(
-                f"✅ Обновление базы наставников завершено успешно!\n\n"
-                f"📊 Статистика:\n"
-                f"• Всего наставников загружено: {result['total_mentors']}\n"
-                f"• Наставников с Telegram и кланами: {result['filtered_mentors']}\n\n"
-                f"База данных наставников обновлена."
-            )
-        else:
-            await message.answer(
-                f"❌ Ошибка при обновлении базы наставников:\n\n"
-                f"{result.get('error', 'Неизвестная ошибка')}\n\n"
-                f"Попробуйте повторить попытку позже или проверьте настройки API."
-            )
+    # Информируем о начале обновления
+    await message.answer(
+        "🔄 <b>Запуск обновления базы наставников...</b>\n\n"
+        "⏳ Процесс запущен в фоновом режиме.\n"
+        "Вы получите уведомление о завершении.\n\n"
+        "Бот продолжает работать в обычном режиме."
+    )
     
-    except Exception as e:
-        await message.answer(
-            f"❌ Произошла непредвиденная ошибка:\n\n"
-            f"{str(e)}\n\n"
-            f"Пожалуйста, попробуйте позже."
-        )
-    
-    finally:
-        # Снимаем блокировку
-        _update_lock.discard(user_id)
+    # Запускаем скрипт асинхронно
+    asyncio.create_task(
+        run_script_async("mentors.py", chat_id, message.bot)
+    )
 
 
 @router.message(F.text == "📚 Обновить базу домашек")
@@ -161,10 +202,10 @@ async def update_all_homeworks_handler(message: Message):
     if not await check_admin_rights(message):
         return
     
-    user_id = message.from_user.id
+    chat_id = message.chat.id
     
     # Проверка блокировки
-    if user_id in _update_lock:
+    if chat_id in _update_lock:
         await message.answer(
             "⏳ Обновление уже выполняется.\n"
             "Пожалуйста, дождитесь завершения предыдущего обновления."
@@ -172,49 +213,21 @@ async def update_all_homeworks_handler(message: Message):
         return
     
     # Добавляем блокировку
-    _update_lock.add(user_id)
+    _update_lock.add(chat_id)
     
-    try:
-        # Отправляем индикатор "печатает"
-        await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
-        
-        # Информируем о начале обновления
-        await message.answer(
-            "🔄 Начинаю обновление базы домашних заданий...\n\n"
-            "⏳ Это может занять очень продолжительное время (десятки минут).\n"
-            "Обновление загружает ДЗ по всем кланам из базы наставников.\n\n"
-            "Пожалуйста, ожидайте..."
-        )
-        
-        # Выполняем обновление
-        result = await update_all_homeworks()
-        
-        # Отправляем результат
-        if result["success"]:
-            await message.answer(
-                f"✅ Обновление базы домашних заданий завершено успешно!\n\n"
-                f"📊 Статистика:\n"
-                f"• Обработано кланов: {result['total_clans']}\n"
-                f"• Загружено домашек (ожидают проверки): {result['total_homeworks']}\n\n"
-                f"База данных домашних заданий обновлена."
-            )
-        else:
-            await message.answer(
-                f"❌ Ошибка при обновлении базы домашек:\n\n"
-                f"{result.get('error', 'Неизвестная ошибка')}\n\n"
-                f"Попробуйте повторить попытку позже или проверьте настройки API."
-            )
+    # Информируем о начале обновления
+    await message.answer(
+        "🔄 <b>Запуск обновления базы домашних заданий...</b>\n\n"
+        "⏳ Процесс запущен в фоновом режиме.\n"
+        "⚠️ Обновление может занять 10-30+ минут.\n\n"
+        "Вы получите уведомление о завершении.\n"
+        "Бот продолжает работать в обычном режиме."
+    )
     
-    except Exception as e:
-        await message.answer(
-            f"❌ Произошла непредвиденная ошибка:\n\n"
-            f"{str(e)}\n\n"
-            f"Пожалуйста, попробуйте позже."
-        )
-    
-    finally:
-        # Снимаем блокировку
-        _update_lock.discard(user_id)
+    # Запускаем скрипт асинхронно
+    asyncio.create_task(
+        run_script_async("homeworks.py", chat_id, message.bot)
+    )
 
 
 # ========== FSM для создания администратора ==========
